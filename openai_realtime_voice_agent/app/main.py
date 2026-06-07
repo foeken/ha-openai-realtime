@@ -2,7 +2,9 @@
 import os
 import sys
 import asyncio
+import json
 import logging
+from contextlib import suppress
 from typing import Optional
 import dotenv
 from pipecat.pipeline.pipeline import Pipeline
@@ -10,6 +12,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.transports.websocket.server import WebsocketServerTransport
+from websockets.asyncio.client import connect as websocket_connect
 from app.mcp_service import HomeAssistantMCPService
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
 from app.audio_recording_service import AudioRecordingService
@@ -40,15 +43,125 @@ DEFAULT_INSTRUCTIONS = (
 class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
     """Adds session.update fields not yet modeled by every Pipecat release."""
 
-    def __init__(self, *args, session_update_patch: Optional[dict] = None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        session_update_patch: Optional[dict] = None,
+        ping_interval_seconds: Optional[float] = 30.0,
+        ping_timeout_seconds: Optional[float] = 60.0,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self._session_update_patch = session_update_patch or {}
+        self._ping_interval_seconds = ping_interval_seconds
+        self._ping_timeout_seconds = ping_timeout_seconds
+        self._reconnect_lock = asyncio.Lock()
 
     async def send_client_event(self, event):
         payload = event.model_dump(exclude_none=True)
         if payload.get("type") == "session.update":
             self._deep_merge(payload.setdefault("session", {}), self._session_update_patch)
         await self._ws_send(payload)
+
+    async def _handle_evt_error(self, evt):
+        if evt.error.code in (
+            "response_cancel_not_active",
+            "conversation_already_has_active_response",
+        ):
+            logger.debug("%s %s", self, evt.error.message)
+            return
+
+        await super()._handle_evt_error(evt)
+
+    async def _connect(self):
+        try:
+            if self._websocket:
+                return
+
+            self._disconnecting = False
+            self._websocket = await websocket_connect(
+                uri=self.base_url,
+                additional_headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                ping_interval=self._ping_interval_seconds,
+                ping_timeout=self._ping_timeout_seconds,
+            )
+            self._receive_task = self.create_task(self._receive_task_handler())
+        except Exception as e:
+            await self.push_error(error_msg=f"Error connecting: {e}", exception=e)
+            self._websocket = None
+
+    async def _ws_send(self, realtime_message):
+        if self._disconnecting:
+            return
+
+        websocket = self._websocket
+        try:
+            await self._send_realtime_message(realtime_message)
+            return
+        except Exception as e:
+            if self._disconnecting:
+                return
+
+            if not await self._recover_realtime_websocket(e, websocket):
+                await self.push_error(error_msg=f"Error sending client event: {e}", exception=e)
+                return
+
+        await self._wait_for_session_ready(realtime_message)
+
+        try:
+            await self._send_realtime_message(realtime_message)
+        except Exception as e:
+            await self.push_error(
+                error_msg=f"Error sending client event after reconnect: {e}",
+                exception=e,
+            )
+
+    async def _send_realtime_message(self, realtime_message):
+        if not self._websocket:
+            raise ConnectionError("OpenAI Realtime websocket is not connected")
+
+        await self._websocket.send(json.dumps(realtime_message))
+
+    async def _recover_realtime_websocket(self, error: Exception, failed_websocket) -> bool:
+        async with self._reconnect_lock:
+            if self._disconnecting:
+                return False
+
+            if self._websocket is not failed_websocket and self._websocket:
+                return True
+
+            logger.warning("OpenAI Realtime websocket send failed; reconnecting session: %s", error)
+
+            receive_task = self._receive_task
+            self._receive_task = None
+            if receive_task:
+                await self.cancel_task(receive_task, timeout=1.0)
+
+            websocket = self._websocket
+            self._websocket = None
+            if websocket:
+                with suppress(Exception):
+                    await websocket.close()
+
+            self._api_session_ready = False
+            self._llm_needs_conversation_setup = True
+            self._current_audio_response = None
+
+            await self._connect()
+            return self._websocket is not None
+
+    async def _wait_for_session_ready(self, realtime_message):
+        if realtime_message.get("type") == "session.update":
+            return
+
+        deadline = asyncio.get_running_loop().time() + 5.0
+        while not self._api_session_ready and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+
+        if not self._api_session_ready:
+            logger.warning("OpenAI Realtime session did not confirm readiness after reconnect")
 
     @classmethod
     def _deep_merge(cls, target: dict, patch: dict):
@@ -341,7 +454,8 @@ class Application:
         # Setup WebSocket event handlers
         async def on_client_connected(client_id: str):
             """Handle new client connection."""
-            await self._ensure_openai_service(client_id=client_id)
+            if self.session_manager and self.openai_service:
+                self.session_manager.set_current_service(client_id, self.openai_service)
             if self.audio_recording_service:
                 self.audio_recording_service.start_new_session(client_id)
         

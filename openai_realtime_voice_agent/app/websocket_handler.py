@@ -1,5 +1,4 @@
 """WebSocket handler for managing WebSocket connections and pipelines."""
-import asyncio
 import json
 import logging
 import uuid
@@ -192,9 +191,6 @@ class WebSocketHandler:
         runner = PipelineRunner()
         task = PipelineTask(pipeline, idle_timeout_secs=None, cancel_on_idle_timeout=False)
         
-        # Start pipeline in background
-        asyncio.create_task(runner.run(task))
-        logger.info("✅ Pipeline started for WebSocket connection")
         logger.info("✅ Pipeline initialized successfully")
         
         return pipeline, runner, task
@@ -323,4 +319,3 @@ class WebSocketHandler:
                     await self.transport.stop()
             except Exception as e:
                 logger.warning(f"⚠️ Error stopping transport: {e}")
-
