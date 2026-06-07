@@ -10,6 +10,8 @@ import dotenv
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
+from pipecat.processors.frame_processor import FrameDirection
+from pipecat.frames.frames import UserStartedSpeakingFrame, UserStoppedSpeakingFrame
 from pipecat.services.openai.realtime import events as realtime_events
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.transports.websocket.server import WebsocketServerTransport
@@ -173,6 +175,17 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
             logger.info("Voice user transcript: %s", transcript)
 
         await super().handle_evt_input_audio_transcription_completed(evt)
+
+    async def _handle_evt_input_audio_transcription_delta(self, evt):
+        await super()._handle_evt_input_audio_transcription_delta(evt)
+
+    async def _handle_evt_speech_started(self, evt):
+        await super()._handle_evt_speech_started(evt)
+        await self.push_frame(UserStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+
+    async def _handle_evt_speech_stopped(self, evt):
+        await super()._handle_evt_speech_stopped(evt)
+        await self.push_frame(UserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
 
     async def _handle_evt_audio_transcript_delta(self, evt):
         if evt.delta:
@@ -427,6 +440,14 @@ class Application:
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize Home Assistant MCP Client: {e}")
         
+        # Initialize audio recording service (optional)
+        self.audio_recording_service = AudioRecordingService(
+            enable_recording=enable_recording,
+            sample_rate=24000,
+            chunk_duration_seconds=30,
+            output_dir="recordings"
+        )
+
         # Initialize WebSocket handler
         self.websocket_handler = WebSocketHandler(
             host=websocket_host,
@@ -448,14 +469,6 @@ class Application:
         self.openai_noise_reduction = openai_noise_reduction
         self.instructions = instructions
         self.mcp_client = mcp_client
-        
-        # Initialize audio recording service (optional)
-        self.audio_recording_service = AudioRecordingService(
-            enable_recording=enable_recording,
-            sample_rate=24000,
-            chunk_duration_seconds=30,
-            output_dir="recordings"
-        )
         
         logger.info("✅ Application initialized - ready to accept WebSocket connections")
     

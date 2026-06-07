@@ -60,24 +60,27 @@ void VoiceAssistantWebSocket::loop() {
   
   // Try to process queued audio if speaker is running
   if (this->speaker_ != nullptr && this->speaker_->is_running() && !this->audio_queue_.empty()) {
-    const std::vector<uint8_t> &queued_data = this->audio_queue_.front();
-    size_t queued_written = this->speaker_->play(queued_data.data(), queued_data.size());
-    
-    if (queued_written == queued_data.size()) {
-      // Successfully sent queued data
-      this->audio_queue_.pop();
-      ESP_LOGD(TAG, "Sent queued audio chunk from loop (%zu bytes)", queued_data.size());
-    } else if (queued_written > 0) {
-      // Partially sent - remove sent portion and keep remainder
-      if (queued_written < queued_data.size()) {
-        std::vector<uint8_t> remainder(queued_data.begin() + queued_written, queued_data.end());
+    size_t drained_chunks = 0;
+    while (!this->audio_queue_.empty() && drained_chunks < MAX_QUEUE_DRAIN_PER_LOOP) {
+      std::vector<uint8_t> &queued_data = this->audio_queue_.front();
+      size_t queued_written = this->speaker_->play(queued_data.data(), queued_data.size());
+
+      if (queued_written == queued_data.size()) {
+        // Successfully sent queued data
+        size_t queued_size = queued_data.size();
         this->audio_queue_.pop();
-        this->audio_queue_.push(remainder);
+        drained_chunks++;
+        ESP_LOGD(TAG, "Sent queued audio chunk from loop (%zu bytes)", queued_size);
+      } else if (queued_written > 0) {
+        // Partially sent - keep the remainder at the front to preserve audio order
+        queued_data.erase(queued_data.begin(), queued_data.begin() + queued_written);
+        ESP_LOGD(TAG, "Partially sent queued audio chunk from loop (%zu bytes remaining)", queued_data.size());
+        break;
       } else {
-        this->audio_queue_.pop();
+        // Buffer is still full, try again next loop
+        break;
       }
     }
-    // If queued_written == 0, buffer is still full, try again next loop
   }
   
   // Handle pending start request
@@ -372,44 +375,30 @@ void VoiceAssistantWebSocket::process_received_audio_(const uint8_t *data, size_
     ESP_LOGD(TAG, "Speaker is stopped, starting it");
     this->speaker_->start();
   }
-  
-  // Try to process queued audio first (if any)
-  while (!this->audio_queue_.empty()) {
-    const std::vector<uint8_t> &queued_data = this->audio_queue_.front();
-    size_t queued_written = this->speaker_->play(queued_data.data(), queued_data.size());
-    
-    if (queued_written == queued_data.size()) {
-      // Successfully sent queued data
-      this->audio_queue_.pop();
-      ESP_LOGD(TAG, "Sent queued audio chunk (%zu bytes)", queued_data.size());
-    } else if (queued_written > 0) {
-      // Partially sent - remove sent portion and keep remainder
-      if (queued_written < queued_data.size()) {
-        // Check heap before creating remainder vector
-#ifdef USE_ESP_IDF
-        size_t free_heap = esp_get_free_heap_size();
-        if (free_heap < MIN_FREE_HEAP_BYTES) {
-          ESP_LOGW(TAG, "Low heap (%zu bytes), dropping remainder instead of queuing", free_heap);
-          this->audio_queue_.pop();
-          break;  // Drop remainder to preserve memory
-        }
-#endif
-        std::vector<uint8_t> remainder(queued_data.begin() + queued_written, queued_data.end());
-        this->audio_queue_.pop();
-        this->audio_queue_.push(remainder);
-      } else {
-        this->audio_queue_.pop();
-      }
-      ESP_LOGD(TAG, "Partially sent queued audio chunk (%zu/%zu bytes)", queued_written, queued_data.size());
-      break;  // Buffer is getting full, stop processing queue
-    } else {
-      // Buffer still full, can't send queued data yet
-      break;
-    }
-  }
-  
+
   // Update last speaker audio time for auto-stop tracking and bot speaking detection
   this->last_speaker_audio_time_ = millis();
+
+  // Preserve playback order: if older audio is queued, enqueue this chunk too.
+  if (!this->audio_queue_.empty()) {
+#ifdef USE_ESP_IDF
+    size_t free_heap = esp_get_free_heap_size();
+    if (free_heap < MIN_FREE_HEAP_BYTES) {
+      ESP_LOGW(TAG, "Low heap (%zu bytes), dropping audio chunk (%zu bytes)", free_heap, len);
+      return;
+    }
+#endif
+    if (this->audio_queue_.size() >= MAX_QUEUE_SIZE) {
+      ESP_LOGW(TAG, "Audio queue at max size (%zu/%zu), dropping audio to preserve order",
+               this->audio_queue_.size(), MAX_QUEUE_SIZE);
+      return;
+    }
+    std::vector<uint8_t> queued_chunk(data, data + len);
+    this->audio_queue_.push(queued_chunk);
+    ESP_LOGD(TAG, "Queued audio behind backlog (%zu bytes, queue size: %zu/%zu)",
+             len, this->audio_queue_.size(), MAX_QUEUE_SIZE);
+    return;
+  }
   
   // Send new audio data
   size_t bytes_written = this->speaker_->play(data, len);
@@ -712,4 +701,3 @@ void VoiceAssistantWebSocket::handle_websocket_event_(esp_websocket_event_id_t e
 
 }  // namespace voice_assistant_websocket
 }  // namespace esphome
-

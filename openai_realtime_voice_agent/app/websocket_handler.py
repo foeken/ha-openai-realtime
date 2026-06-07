@@ -152,8 +152,8 @@ class WebSocketHandler:
         ]
         
         # Add input audio recorder to capture ONLY InputAudioRawFrame
-        input_recorder = self.audio_recording_service.get_input_recorder() if self.audio_recording_service else None
-        if input_recorder:
+        input_recorder = self.audio_recording_service.get_input_recorder() if self.audio_recording_service is not None else None
+        if input_recorder is not None:
             pipeline_components.append(input_recorder)
         
         # Continue with rest of pipeline
@@ -169,8 +169,8 @@ class WebSocketHandler:
         pipeline_components.append(output_activity_tracker)
         
         # Add output audio recorder to capture ONLY OutputAudioRawFrame
-        output_recorder = self.audio_recording_service.get_output_recorder() if self.audio_recording_service else None
-        if output_recorder:
+        output_recorder = self.audio_recording_service.get_output_recorder() if self.audio_recording_service is not None else None
+        if output_recorder is not None:
             pipeline_components.append(output_recorder)
         
         pipeline_components.append(transport.output())
@@ -183,7 +183,7 @@ class WebSocketHandler:
         logger.info("✅ Pipeline created for WebSocket connection")
         
         # Audio recording is handled by AudioFrameRecorder processors in the pipeline
-        if self.audio_recording_service:
+        if self.audio_recording_service is not None:
             logger.info("🎙️ Audio recording enabled - will record input and output audio")
         
         # Create pipeline runner and task

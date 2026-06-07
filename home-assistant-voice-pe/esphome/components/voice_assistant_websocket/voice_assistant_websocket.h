@@ -89,9 +89,9 @@ class VoiceAssistantWebSocket : public Component {
   std::vector<uint8_t> output_buffer_;
   
   // Queue for audio data when speaker buffer is full
-  // Reduced size to prevent memory exhaustion
   std::queue<std::vector<uint8_t>> audio_queue_;
-  static const size_t MAX_QUEUE_SIZE = 10;  // Max 10 chunks (~40KB) to prevent memory overflow
+  static const size_t MAX_QUEUE_SIZE = 32;  // About 1.3s of 24kHz mono PCM at 40ms/chunk
+  static const size_t MAX_QUEUE_DRAIN_PER_LOOP = 8;
   static const size_t MIN_FREE_HEAP_BYTES = 15000;  // Minimum free heap required before queuing audio
   
   // Timing
@@ -177,4 +177,3 @@ template<typename... Ts> class VoiceAssistantWebSocketInterruptAction : public A
 
 }  // namespace voice_assistant_websocket
 }  // namespace esphome
-

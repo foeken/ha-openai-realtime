@@ -4,7 +4,13 @@ from datetime import datetime
 from typing import Optional
 
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from pipecat.frames.frames import Frame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame
+from pipecat.frames.frames import (
+    Frame,
+    InputAudioRawFrame,
+    OutputAudioRawFrame,
+    StartFrame,
+    TTSAudioRawFrame,
+)
 from app.audio_recorder import AudioRecorder
 
 logger = logging.getLogger(__name__)
@@ -45,7 +51,8 @@ class AudioFrameRecorder(FrameProcessor):
             try:
                 audio_bytes = frame.audio
                 if audio_bytes and len(audio_bytes) > 0:
-                    logger.debug(f"🎙️ Recording {len(audio_bytes)} bytes of {self.frame_type.__name__}")
+                    frame_type_name = type(frame).__name__
+                    logger.debug(f"🎙️ Recording {len(audio_bytes)} bytes of {frame_type_name}")
                     self.record_func(audio_bytes)
             except Exception as e:
                 logger.warning(f"⚠️ Error recording audio: {e}")
@@ -97,7 +104,7 @@ class AudioRecordingService:
         )
         
         self.output_recorder = AudioFrameRecorder(
-            OutputAudioRawFrame,
+            (OutputAudioRawFrame, TTSAudioRawFrame),
             self.audio_recorder,
             self.audio_recorder.record_output_audio
         )
@@ -149,4 +156,3 @@ class AudioRecordingService:
         if self.audio_recorder:
             self.audio_recorder.stop_recording()
             self.audio_recorder = None
-
