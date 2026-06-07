@@ -40,13 +40,23 @@ Configure the addon in Home Assistant:
    - `instructions`: Custom instructions for the AI assistant (default: English smart-home assistant)
    - `default_agent`: Agent route used when no wake word or agent route is provided (default: `default`)
    - `wake_word_agent_map`: JSON object or comma list mapping wake words to agents (default: `{"hey_jarvis":"jarvis","okay_nabu":"nabu"}`)
+   - `agent_prompts_json`: Prompt-only JSON object mapping agent names to instructions
    - `agents_json`: Optional JSON object defining per-agent `instructions`, `voice`, and allowed HA MCP `tools`
    - `client_metadata_timeout_seconds`: How long the server waits for initial ESP session metadata before falling back to URL/IP routing (default: 1.0)
    - `auto_disconnect_after_response_seconds`: Grace period after the assistant finishes speaking before closing the satellite session (default: 0.5, set to -1 to disable)
    - `session_reuse_timeout_seconds`: Timeout for session reuse in seconds (default: 300, max: 3600)
    - `enable_recording`: Enable audio recording for debugging (default: false)
 
-Example `agents_json`:
+Example `agent_prompts_json`:
+
+```json
+{
+  "jarvis": "You are Jarvis. You can control the smart home. Be warm, concise, and a little dry.",
+  "nabu": "You are Nabu. Give short factual home status answers and avoid personality."
+}
+```
+
+Example `agents_json` for future voice/tool differences:
 
 ```json
 {

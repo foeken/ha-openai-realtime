@@ -122,6 +122,45 @@ def _parse_mapping(raw: Optional[str]) -> dict[str, str]:
     return mapping
 
 
+def _parse_prompt_mapping(raw: Optional[str]) -> dict[str, str]:
+    if not raw:
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("Ignoring invalid AGENT_PROMPTS_JSON: %s", exc)
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.warning("Ignoring AGENT_PROMPTS_JSON because it is not a JSON object")
+        return {}
+
+    prompt_items = parsed.get("agents", parsed)
+    if not isinstance(prompt_items, dict):
+        logger.warning("Ignoring AGENT_PROMPTS_JSON agents value because it is not an object")
+        return {}
+
+    prompts: dict[str, str] = {}
+    for raw_name, value in prompt_items.items():
+        name = normalize_route_key(raw_name)
+        if not name:
+            continue
+
+        prompt = None
+        if isinstance(value, str):
+            prompt = value.strip()
+        elif isinstance(value, dict):
+            candidate = value.get("instructions") or value.get("prompt")
+            if isinstance(candidate, str):
+                prompt = candidate.strip()
+
+        if prompt:
+            prompts[name] = prompt
+
+    return prompts
+
+
 def load_agent_registry(
     env: Mapping[str, str],
     *,
@@ -133,6 +172,7 @@ def load_agent_registry(
     Supported env:
     - DEFAULT_AGENT: default route name.
     - AGENTS_JSON / AGENT_CONFIG_JSON: JSON object of agent profiles.
+    - AGENT_PROMPTS_JSON: JSON object mapping agent names to instructions.
     - WAKE_WORD_AGENT_MAP: JSON object or comma list, e.g. hey_jarvis=jarvis.
     """
     default_agent = normalize_route_key(env.get("DEFAULT_AGENT")) or "default"
@@ -165,6 +205,15 @@ def load_agent_registry(
                         voice=(config.get("voice") or default_voice).lower(),
                         tools=_parse_tools(config.get("tools")),
                     )
+
+    for name, prompt in _parse_prompt_mapping(env.get("AGENT_PROMPTS_JSON")).items():
+        current_profile = profiles.get(name)
+        profiles[name] = AgentProfile(
+            name=name,
+            instructions=prompt,
+            voice=current_profile.voice if current_profile else default_voice,
+            tools=current_profile.tools if current_profile else None,
+        )
 
     wake_word_map = {
         "hey_jarvis": "jarvis",

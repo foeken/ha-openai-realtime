@@ -1,5 +1,5 @@
 name: OpenAI Realtime Voice Agent
-version: "0.2.4"
+version: "0.2.5"
 slug: openai_realtime_voice_agent
 description: Voice control using OpenAI Realtime API with WebSocket support for ESP32 devices
 url: https://github.com/foeken/ha-openai-realtime
@@ -30,6 +30,7 @@ options:
   # Agent routing
   default_agent: "default"
   wake_word_agent_map: '{"hey_jarvis":"jarvis","okay_nabu":"nabu"}'
+  agent_prompts_json: ""
   agents_json: ""
   client_metadata_timeout_seconds: 1.0
   auto_disconnect_after_response_seconds: 0.5
@@ -53,6 +54,7 @@ schema:
   instructions: str
   default_agent: str
   wake_word_agent_map: str
+  agent_prompts_json: str
   agents_json: str
   client_metadata_timeout_seconds: float(0.0,5.0)
   auto_disconnect_after_response_seconds: float(-1.0,10.0)

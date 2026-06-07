@@ -25,6 +25,7 @@ INSTRUCTIONS=$(bashio::config 'instructions')
 # Get agent routing settings
 DEFAULT_AGENT=$(bashio::config 'default_agent')
 WAKE_WORD_AGENT_MAP=$(bashio::config 'wake_word_agent_map')
+AGENT_PROMPTS_JSON=$(bashio::config 'agent_prompts_json')
 AGENTS_JSON=$(bashio::config 'agents_json')
 CLIENT_METADATA_TIMEOUT_SECONDS=$(bashio::config 'client_metadata_timeout_seconds')
 AUTO_DISCONNECT_AFTER_RESPONSE_SECONDS=$(bashio::config 'auto_disconnect_after_response_seconds')
@@ -64,6 +65,7 @@ export INSTRUCTIONS
 # Export agent routing settings
 export DEFAULT_AGENT
 export WAKE_WORD_AGENT_MAP
+export AGENT_PROMPTS_JSON
 export AGENTS_JSON
 export CLIENT_METADATA_TIMEOUT_SECONDS
 export AUTO_DISCONNECT_AFTER_RESPONSE_SECONDS
