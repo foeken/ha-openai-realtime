@@ -58,6 +58,33 @@ class AudioFrameRecorder(FrameProcessor):
                 logger.warning(f"⚠️ Error recording audio: {e}")
 
 
+class AudioRecordingSession:
+    """Independent recorder pair for one websocket voice session."""
+
+    def __init__(self, client_id: str, output_dir: str):
+        self.audio_recorder = AudioRecorder(output_dir=output_dir)
+        self.audio_recorder.start_recording(client_id=client_id)
+        self.input_recorder = AudioFrameRecorder(
+            InputAudioRawFrame,
+            self.audio_recorder,
+            self.audio_recorder.record_input_audio,
+        )
+        self.output_recorder = AudioFrameRecorder(
+            (OutputAudioRawFrame, TTSAudioRawFrame),
+            self.audio_recorder,
+            self.audio_recorder.record_output_audio,
+        )
+
+    def get_input_recorder(self) -> AudioFrameRecorder:
+        return self.input_recorder
+
+    def get_output_recorder(self) -> AudioFrameRecorder:
+        return self.output_recorder
+
+    def stop(self):
+        self.audio_recorder.stop_recording()
+
+
 class AudioRecordingService:
     """Service for recording audio using Pipecat's AudioBufferProcessor."""
     
@@ -118,6 +145,14 @@ class AudioRecordingService:
     def get_output_recorder(self) -> Optional[AudioFrameRecorder]:
         """Get the output audio recorder for pipeline integration."""
         return self.output_recorder if self.enable_recording else None
+
+    def create_session(self, client_id: str) -> Optional[AudioRecordingSession]:
+        """Create an isolated recording session for one concurrent client."""
+        if not self.enable_recording:
+            return None
+        session = AudioRecordingSession(client_id, self.output_dir)
+        logger.info(f"🎙️ Started recording session: {client_id}")
+        return session
     
     def start_new_session(self, client_id: Optional[str] = None):
         """Start a new recording session."""

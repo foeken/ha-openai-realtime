@@ -16,6 +16,9 @@ VoiceAssistantWebSocket = voice_assistant_websocket_ns.class_(
 )
 
 CONF_SERVER_URL = "server_url"
+CONF_CLIENT_ID = "client_id"
+CONF_AGENT = "agent"
+CONF_WAKE_WORD = "wake_word"
 CONF_VOICE_ASSISTANT_WEBSOCKET = "voice_assistant_websocket"
 CONF_ON_CONNECTED = "on_connected"
 CONF_ON_DISCONNECTED = "on_disconnected"
@@ -26,6 +29,8 @@ CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(VoiceAssistantWebSocket),
         cv.Required(CONF_SERVER_URL): cv.string,
+        cv.Optional(CONF_CLIENT_ID, default=""): cv.string,
+        cv.Optional(CONF_AGENT, default=""): cv.string,
         cv.Optional(CONF_MICROPHONE): cv.use_id(microphone.Microphone),
         cv.Optional(CONF_SPEAKER): cv.use_id(speaker.Speaker),
         cv.Optional(CONF_ON_CONNECTED): automation.validate_automation(single=True),
@@ -53,6 +58,8 @@ async def to_code(config):
         )
     
     cg.add(var.set_server_url(config[CONF_SERVER_URL]))
+    cg.add(var.set_client_id(config[CONF_CLIENT_ID]))
+    cg.add(var.set_agent(config[CONF_AGENT]))
     
     if CONF_MICROPHONE in config:
         mic = await cg.get_variable(config[CONF_MICROPHONE])
@@ -91,6 +98,13 @@ VOICE_ASSISTANT_WEBSOCKET_ACTION_SCHEMA = maybe_simple_id(
     }
 )
 
+VOICE_ASSISTANT_WEBSOCKET_START_ACTION_SCHEMA = maybe_simple_id(
+    {
+        cv.Required(CONF_ID): cv.use_id(VoiceAssistantWebSocket),
+        cv.Optional(CONF_WAKE_WORD, default=""): cv.templatable(cv.string),
+    }
+)
+
 VOICE_ASSISTANT_WEBSOCKET_CONDITION_SCHEMA = maybe_simple_id(
     {
         cv.Required(CONF_ID): cv.use_id(VoiceAssistantWebSocket),
@@ -101,11 +115,14 @@ VOICE_ASSISTANT_WEBSOCKET_CONDITION_SCHEMA = maybe_simple_id(
 @automation.register_action(
     "voice_assistant_websocket.start",
     voice_assistant_websocket_ns.class_("VoiceAssistantWebSocketStartAction"),
-    VOICE_ASSISTANT_WEBSOCKET_ACTION_SCHEMA,
+    VOICE_ASSISTANT_WEBSOCKET_START_ACTION_SCHEMA,
 )
 async def voice_assistant_websocket_start_to_code(config, action_id, template_arg, args):
     paren = await cg.get_variable(config[CONF_ID])
-    return cg.new_Pvariable(action_id, template_arg, paren)
+    var = cg.new_Pvariable(action_id, template_arg, paren)
+    wake_word = await cg.templatable(config[CONF_WAKE_WORD], args, cg.std_string)
+    cg.add(var.set_wake_word(wake_word))
+    return var
 
 
 @automation.register_action(
@@ -156,4 +173,3 @@ async def voice_assistant_websocket_interrupt_to_code(config, action_id, templat
 async def voice_assistant_websocket_is_bot_speaking_to_code(config, condition_id, template_arg, args):
     paren = await cg.get_variable(config[CONF_ID])
     return cg.new_Pvariable(condition_id, template_arg, paren)
-

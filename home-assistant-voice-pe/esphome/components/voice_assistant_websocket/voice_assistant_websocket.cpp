@@ -134,12 +134,19 @@ void VoiceAssistantWebSocket::loop() {
 void VoiceAssistantWebSocket::dump_config() {
   ESP_LOGCONFIG(TAG, "Voice Assistant WebSocket:");
   ESP_LOGCONFIG(TAG, "  Server URL: %s", this->server_url_.c_str());
+  ESP_LOGCONFIG(TAG, "  Client ID: %s", this->client_id_.c_str());
+  ESP_LOGCONFIG(TAG, "  Agent: %s", this->agent_.empty() ? "(wake-word routed)" : this->agent_.c_str());
   ESP_LOGCONFIG(TAG, "  Microphone Sample Rate: %u Hz", MICROPHONE_SAMPLE_RATE);
   ESP_LOGCONFIG(TAG, "  Input Sample Rate (after resampling): %u Hz", INPUT_SAMPLE_RATE);
   ESP_LOGCONFIG(TAG, "  Output Sample Rate: %u Hz", OUTPUT_SAMPLE_RATE);
   ESP_LOGCONFIG(TAG, "  Microphone: %s", this->microphone_ ? "Yes" : "No");
   ESP_LOGCONFIG(TAG, "  Speaker: %s", this->speaker_ ? "Yes" : "No");
   ESP_LOGCONFIG(TAG, "  Max Queue Size: %zu chunks", MAX_QUEUE_SIZE);
+}
+
+void VoiceAssistantWebSocket::start(const std::string &wake_word) {
+  this->wake_word_ = wake_word;
+  this->start();
 }
 
 void VoiceAssistantWebSocket::start() {
@@ -289,6 +296,63 @@ void VoiceAssistantWebSocket::connect_websocket_() {
     if (this->state_callback_) {
       this->state_callback_(this->state_);
     }
+  }
+}
+
+std::string VoiceAssistantWebSocket::json_escape_(const std::string &value) {
+  std::string escaped;
+  escaped.reserve(value.size());
+  for (char c : value) {
+    switch (c) {
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        escaped += c;
+        break;
+    }
+  }
+  return escaped;
+}
+
+void VoiceAssistantWebSocket::send_session_start_() {
+  if (!this->is_connected() || this->websocket_client_ == nullptr) {
+    return;
+  }
+
+  std::string payload = "{\"type\":\"session_start\"";
+  if (!this->client_id_.empty()) {
+    payload += ",\"client_id\":\"" + json_escape_(this->client_id_) + "\"";
+  }
+  if (!this->wake_word_.empty()) {
+    payload += ",\"wake_word\":\"" + json_escape_(this->wake_word_) + "\"";
+  }
+  if (!this->agent_.empty()) {
+    payload += ",\"agent\":\"" + json_escape_(this->agent_) + "\"";
+  }
+  payload += "}";
+
+  int sent = esp_websocket_client_send_text(
+      this->websocket_client_, payload.c_str(), payload.size(), portMAX_DELAY);
+  if (sent < 0) {
+    ESP_LOGW(TAG, "Failed to send session metadata");
+  } else {
+    ESP_LOGI(TAG, "Sent session metadata: wake_word=%s agent=%s client_id=%s",
+             this->wake_word_.c_str(),
+             this->agent_.empty() ? "(wake-word routed)" : this->agent_.c_str(),
+             this->client_id_.c_str());
   }
 }
 
@@ -568,6 +632,7 @@ void VoiceAssistantWebSocket::handle_websocket_event_(esp_websocket_event_id_t e
       this->reconnect_attempts_ = 0;
       this->reconnect_pending_ = false;
       this->last_audio_send_ = millis();
+      this->send_session_start_();
       
       if (this->state_callback_) {
         this->state_callback_(this->state_);

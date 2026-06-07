@@ -29,6 +29,7 @@
 #    esphome upload voice_pe_config.yaml
 
 substitutions:
+  satellite_id: ha-voice-openai
   # Voice Assistant Phase IDs (for state management)
   voice_assist_idle_phase_id: '1'
   voice_assist_waiting_for_command_phase_id: '2'
@@ -42,7 +43,7 @@ substitutions:
   wake_word_triggered_sound_file: wake_sound.flac
 
 esphome:
-  name: ha-voice-openai
+  name: ${satellite_id}
   friendly_name: Home Assistant OpenAI Realtime Voice
   name_add_mac_suffix: true
   min_version: 2025.11.0
@@ -1074,6 +1075,7 @@ micro_wake_word:
                 # Voice assistant not running - start it
                 - voice_assistant_websocket.start:
                     id: voice_assistant_ws
+                    wake_word: !lambda 'return wake_word;'
 
 # External Components - Custom voice_assistant_websocket component
 external_components:
@@ -1096,6 +1098,7 @@ voice_assistant_websocket:
   id: voice_assistant_ws
   # Server URL - uses secret from secrets.yaml
   server_url: !secret server_url
+  client_id: ${satellite_id}
   
   # Audio input (microphone) - reference to I2S audio input
   microphone: i2s_mics

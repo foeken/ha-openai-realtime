@@ -157,7 +157,8 @@ def create_disconnect_callback(
 
 
 def create_disconnect_tool_handler(
-    transport: Optional["WebsocketServerTransport"]
+    transport: Optional["WebsocketServerTransport"] = None,
+    disconnect_callback: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> Callable[["FunctionCallParams"], Awaitable[None]]:
     """
     Create a disconnect tool handler for Pipecat's OpenAI Realtime Service.
@@ -175,11 +176,11 @@ def create_disconnect_tool_handler(
         # Get reason from arguments
         reason = params.arguments.get("reason", "user_requested")
         
-        # Create disconnect callback that closes the connection
-        disconnect_callback = create_disconnect_callback(transport, reason=reason)
+        # Create disconnect callback that closes only this client connection.
+        callback = disconnect_callback or create_disconnect_callback(transport, reason=reason)
         
         # Execute the disconnect tool
-        result = await execute_disconnect_tool(params.arguments, disconnect_callback)
+        result = await execute_disconnect_tool(params.arguments, callback)
         
         # Send result back to OpenAI
         if result.get("success"):

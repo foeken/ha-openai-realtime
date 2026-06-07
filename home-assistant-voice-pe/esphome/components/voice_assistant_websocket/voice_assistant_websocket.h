@@ -34,10 +34,13 @@ class VoiceAssistantWebSocket : public Component {
   void dump_config() override;
 
   void set_server_url(const std::string &url) { this->server_url_ = url; }
+  void set_client_id(const std::string &client_id) { this->client_id_ = client_id; }
+  void set_agent(const std::string &agent) { this->agent_ = agent; }
   void set_microphone(microphone::Microphone *mic) { this->microphone_ = mic; }
   void set_speaker(speaker::Speaker *spkr) { this->speaker_ = spkr; }
   
   void start();
+  void start(const std::string &wake_word);
   void stop();
   void request_start();
   void interrupt();  // Send interrupt message to server and stop speaker
@@ -59,6 +62,8 @@ class VoiceAssistantWebSocket : public Component {
  protected:
   void connect_websocket_();
   void disconnect_websocket_();
+  void send_session_start_();
+  static std::string json_escape_(const std::string &value);
   void send_audio_chunk_(const uint8_t *data, size_t len);
   void process_received_audio_(const uint8_t *data, size_t len);
   void on_microphone_data_(const std::vector<uint8_t> &data);
@@ -66,6 +71,9 @@ class VoiceAssistantWebSocket : public Component {
   void handle_websocket_event_(esp_websocket_event_id_t event_id, esp_websocket_event_data_t *event_data);
   
   std::string server_url_;
+  std::string client_id_;
+  std::string agent_;
+  std::string wake_word_;
   microphone::Microphone *microphone_{nullptr};
   speaker::Speaker *speaker_{nullptr};
   
@@ -129,7 +137,8 @@ class VoiceAssistantWebSocket : public Component {
 template<typename... Ts> class VoiceAssistantWebSocketStartAction : public Action<Ts...> {
  public:
   VoiceAssistantWebSocketStartAction(VoiceAssistantWebSocket *parent) : parent_(parent) {}
-  void play(const Ts &...x) override { this->parent_->start(); }
+  TEMPLATABLE_VALUE(std::string, wake_word)
+  void play(const Ts &...x) override { this->parent_->start(this->wake_word_.value(x...)); }
  protected:
   VoiceAssistantWebSocket *parent_;
 };

@@ -10,3 +10,11 @@
 - After the wake trigger is confirmed, wait about 1 second, then speak the test command.
 - Watch both server logs and ESPHome serial logs for the full loop: wake, websocket connection, `Voice user transcript`, model/tool response, `Voice assistant response`, audio playback, stop, and return to idle.
 - Repeat from idle for follow-up tests; avoid overlapping new TTS with assistant speech.
+
+## Parallel Satellite Architecture
+
+- Treat each ESP satellite wake session as isolated state: one websocket, one Pipecat pipeline, one OpenAI Realtime service, one context aggregator pair, and one optional recorder pair.
+- Do not reintroduce a global `OpenAIRealtimeLLMService`, global websocket transport, or global recorder for active client sessions; those make rooms cancel or overwrite each other.
+- Route wake words by session metadata (`session_start` with `wake_word`) or by websocket URL path/query (`/jarvis`, `?agent=jarvis`).
+- Keep `disconnect_client` scoped to the current websocket only, so "stop listening" in one room does not close another room's session.
+- Keep wake sessions single-turn by default: arm server-side auto-disconnect after the final assistant response and close the current websocket only after `BotStoppedSpeakingFrame`, so audio is not clipped and the ESP returns to idle for the next wake word.

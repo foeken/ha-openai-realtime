@@ -1,4 +1,5 @@
 """WebSocket handler for managing WebSocket connections and pipelines."""
+import asyncio
 import json
 import logging
 import uuid
@@ -7,15 +8,24 @@ from typing import Optional, Callable, Awaitable, Dict
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
+from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.server import WebsocketServerTransport, WebsocketServerParams
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from pipecat.frames.frames import Frame, InputAudioRawFrame, OutputAudioRawFrame, StartFrame, EndFrame
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    CancelFrame,
+    EndFrame,
+    Frame,
+    InputAudioRawFrame,
+    OutputAudioRawFrame,
+    StartFrame,
+)
 
 from app.raw_audio_serializer import RawAudioSerializer
 from app.session_manager import SessionManager
-from app.audio_recording_service import AudioRecordingService
+from app.audio_recording_service import AudioRecordingService, AudioRecordingSession
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +56,80 @@ class SessionActivityTracker(FrameProcessor):
         
         # Pass frame through to next processor
         await self.push_frame(frame, direction)
+
+
+class SessionAutoDisconnect(FrameProcessor):
+    """Closes one wake session after the final assistant audio finishes playing."""
+
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        disconnect_callback: Callable[[], Awaitable[None]],
+        delay_seconds: float,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._client_id = client_id
+        self._disconnect_callback = disconnect_callback
+        self._delay_seconds = delay_seconds
+        self._armed = False
+        self._disconnecting = False
+        self._disconnect_task = None
+
+    def arm(self):
+        if self._delay_seconds < 0 or self._disconnecting:
+            return
+
+        self._armed = True
+        logger.debug("🔌 Auto-disconnect armed for client %s", self._client_id)
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        if isinstance(frame, StartFrame):
+            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
+            return
+
+        if isinstance(frame, (EndFrame, CancelFrame)):
+            self._armed = False
+            await self._cancel_disconnect_task()
+            await self.push_frame(frame, direction)
+            return
+
+        await self.push_frame(frame, direction)
+
+        if (
+            self._armed
+            and direction == FrameDirection.UPSTREAM
+            and isinstance(frame, BotStoppedSpeakingFrame)
+        ):
+            self._armed = False
+            self._schedule_disconnect()
+
+    async def cleanup(self):
+        await self._cancel_disconnect_task()
+        await super().cleanup()
+
+    def _schedule_disconnect(self):
+        if self._disconnecting:
+            return
+        if self._disconnect_task and not self._disconnect_task.done():
+            return
+
+        self._disconnect_task = self.create_task(self._disconnect_after_delay())
+
+    async def _cancel_disconnect_task(self):
+        if self._disconnect_task and not self._disconnect_task.done():
+            await self.cancel_task(self._disconnect_task)
+        self._disconnect_task = None
+
+    async def _disconnect_after_delay(self):
+        self._disconnecting = True
+        if self._delay_seconds > 0:
+            await asyncio.sleep(self._delay_seconds)
+
+        logger.info("🔌 Auto-disconnecting client %s after assistant response", self._client_id)
+        await self._disconnect_callback()
 
 
 class WebSocketHandler:
@@ -106,10 +190,12 @@ class WebSocketHandler:
     
     def build_pipeline(
         self,
-        transport: WebsocketServerTransport,
+        transport: BaseTransport,
         openai_service: OpenAIRealtimeLLMService,
         client_id: str,
-        activity_callback: Optional[Callable[[], None]] = None
+        activity_callback: Optional[Callable[[], None]] = None,
+        recording_session: Optional[AudioRecordingSession] = None,
+        auto_disconnect: Optional[SessionAutoDisconnect] = None,
     ) -> tuple[Pipeline, PipelineRunner, PipelineTask]:
         """
         Build pipeline for a WebSocket transport connection.
@@ -152,7 +238,10 @@ class WebSocketHandler:
         ]
         
         # Add input audio recorder to capture ONLY InputAudioRawFrame
-        input_recorder = self.audio_recording_service.get_input_recorder() if self.audio_recording_service is not None else None
+        if recording_session is not None:
+            input_recorder = recording_session.get_input_recorder()
+        else:
+            input_recorder = self.audio_recording_service.get_input_recorder() if self.audio_recording_service is not None else None
         if input_recorder is not None:
             pipeline_components.append(input_recorder)
         
@@ -169,9 +258,15 @@ class WebSocketHandler:
         pipeline_components.append(output_activity_tracker)
         
         # Add output audio recorder to capture ONLY OutputAudioRawFrame
-        output_recorder = self.audio_recording_service.get_output_recorder() if self.audio_recording_service is not None else None
+        if recording_session is not None:
+            output_recorder = recording_session.get_output_recorder()
+        else:
+            output_recorder = self.audio_recording_service.get_output_recorder() if self.audio_recording_service is not None else None
         if output_recorder is not None:
             pipeline_components.append(output_recorder)
+
+        if auto_disconnect is not None:
+            pipeline_components.append(auto_disconnect)
         
         pipeline_components.append(transport.output())
         

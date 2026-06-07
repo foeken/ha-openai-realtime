@@ -38,8 +38,30 @@ Configure the addon in Home Assistant:
    - `openai_transcription_model`: Input transcription model (default: `gpt-realtime-whisper`)
    - `openai_noise_reduction`: Input noise reduction (`near_field` or `far_field`, default: `far_field`)
    - `instructions`: Custom instructions for the AI assistant (default: English smart-home assistant)
+   - `default_agent`: Agent route used when no wake word or agent route is provided (default: `default`)
+   - `wake_word_agent_map`: JSON object or comma list mapping wake words to agents (default: `{"hey_jarvis":"jarvis","okay_nabu":"nabu"}`)
+   - `agents_json`: Optional JSON object defining per-agent `instructions`, `voice`, and allowed HA MCP `tools`
+   - `client_metadata_timeout_seconds`: How long the server waits for initial ESP session metadata before falling back to URL/IP routing (default: 1.0)
+   - `auto_disconnect_after_response_seconds`: Grace period after the assistant finishes speaking before closing the satellite session (default: 0.5, set to -1 to disable)
    - `session_reuse_timeout_seconds`: Timeout for session reuse in seconds (default: 300, max: 3600)
    - `enable_recording`: Enable audio recording for debugging (default: false)
+
+Example `agents_json`:
+
+```json
+{
+  "jarvis": {
+    "voice": "cedar",
+    "instructions": "You are Jarvis. You can control the smart home.",
+    "tools": ["HassTurnOn", "HassTurnOff", "HassLightSet", "GetLiveContext"]
+  },
+  "nabu": {
+    "voice": "marin",
+    "instructions": "You are a concise house status assistant.",
+    "tools": ["GetLiveContext", "GetDateTime"]
+  }
+}
+```
 
 ## Updates
 
@@ -50,7 +72,9 @@ Home Assistant checks this repository for the latest add-on `version`. When a ne
 ## Features
 
 - OpenAI Realtime API integration
-- WebSocket server for ESP32 devices
+- Multi-client WebSocket server for parallel ESP32 voice satellites
+- Wake-word or URL route based agent selection
+- Automatic per-wake session close after the assistant finishes speaking
 - Home Assistant MCP (Model Context Protocol) integration
 - Voice activity detection
 - Session management with automatic reuse
