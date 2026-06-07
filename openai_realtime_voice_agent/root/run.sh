@@ -11,6 +11,13 @@ LONGLIVED_TOKEN=$(bashio::config 'longlived_token')
 VAD_THRESHOLD=$(bashio::config 'vad_threshold')
 VAD_PREFIX_PADDING_MS=$(bashio::config 'vad_prefix_padding_ms')
 VAD_SILENCE_DURATION_MS=$(bashio::config 'vad_silence_duration_ms')
+VAD_IDLE_TIMEOUT_MS=$(bashio::config 'vad_idle_timeout_ms')
+
+# Get OpenAI Realtime settings
+OPENAI_REALTIME_MODEL=$(bashio::config 'openai_realtime_model')
+OPENAI_REALTIME_VOICE=$(bashio::config 'openai_realtime_voice')
+OPENAI_TRANSCRIPTION_MODEL=$(bashio::config 'openai_transcription_model')
+OPENAI_NOISE_REDUCTION=$(bashio::config 'openai_noise_reduction')
 
 # Get instructions
 INSTRUCTIONS=$(bashio::config 'instructions')
@@ -36,6 +43,13 @@ export LONGLIVED_TOKEN
 export VAD_THRESHOLD
 export VAD_PREFIX_PADDING_MS
 export VAD_SILENCE_DURATION_MS
+export VAD_IDLE_TIMEOUT_MS
+
+# Export OpenAI Realtime settings
+export OPENAI_REALTIME_MODEL
+export OPENAI_REALTIME_VOICE
+export OPENAI_TRANSCRIPTION_MODEL
+export OPENAI_NOISE_REDUCTION
 
 # Export instructions
 export INSTRUCTIONS
@@ -56,4 +70,3 @@ fi
 # Start the application
 export PYTHONUNBUFFERED=1
 exec python3 -m app.main
-

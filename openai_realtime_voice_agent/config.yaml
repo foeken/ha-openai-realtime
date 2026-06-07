@@ -1,8 +1,8 @@
 name: OpenAI Realtime Voice Agent
-version: "0.1.0"
+version: "0.2.0"
 slug: openai_realtime_voice_agent
 description: Voice control using OpenAI Realtime API with WebSocket support for ESP32 devices
-url: https://github.com/fjfricke/ha-openai-realtime
+url: https://github.com/foeken/ha-openai-realtime
 arch:
   - aarch64
   - amd64
@@ -19,10 +19,16 @@ options:
   vad_threshold: 0.5
   vad_prefix_padding_ms: 300
   vad_silence_duration_ms: 500
+  vad_idle_timeout_ms: 10000
+  # OpenAI Realtime settings
+  openai_realtime_model: "gpt-realtime-2"
+  openai_realtime_voice: "cedar"
+  openai_transcription_model: "gpt-realtime-whisper"
+  openai_noise_reduction: "far_field"
   # OpenAI instructions
-  instructions: "You are the Home Assistant Voice Agent and can control the Smart Home."
+  instructions: "You are the Home Assistant Voice Agent and can control the smart home. Respond in English unless the user explicitly asks for another language."
   # Session management
-  session_reuse_timeout_seconds: 300  # 5 Minuten (in Sekunden)
+  session_reuse_timeout_seconds: 300
   # Audio recording (optional, for debugging)
   enable_recording: false
 schema:
@@ -33,7 +39,12 @@ schema:
   vad_threshold: float(0.0,1.0)
   vad_prefix_padding_ms: int
   vad_silence_duration_ms: int
+  vad_idle_timeout_ms: int
+  openai_realtime_model: str
+  openai_realtime_voice: str
+  openai_transcription_model: str
+  openai_noise_reduction: str
   instructions: str
-  session_reuse_timeout_seconds: int(0,3600)  # bis 1 Stunde
+  session_reuse_timeout_seconds: int(0,3600)
   enable_recording: bool
-image: ghcr.io/fjfricke/ha-openai-realtime/openai-realtime-voice-agent-{arch}
+image: ghcr.io/foeken/ha-openai-realtime/openai-realtime-voice-agent-{arch}

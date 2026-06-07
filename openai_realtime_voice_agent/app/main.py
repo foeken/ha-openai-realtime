@@ -31,6 +31,34 @@ logging.getLogger("__main__").setLevel(logging.INFO)
 dotenv.load_dotenv()
 
 
+DEFAULT_INSTRUCTIONS = (
+    "You are the Home Assistant Voice Agent and can control the smart home. "
+    "Respond in English unless the user explicitly asks for another language."
+)
+
+
+class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
+    """Adds session.update fields not yet modeled by every Pipecat release."""
+
+    def __init__(self, *args, session_update_patch: Optional[dict] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._session_update_patch = session_update_patch or {}
+
+    async def send_client_event(self, event):
+        payload = event.model_dump(exclude_none=True)
+        if payload.get("type") == "session.update":
+            self._deep_merge(payload.setdefault("session", {}), self._session_update_patch)
+        await self._ws_send(payload)
+
+    @classmethod
+    def _deep_merge(cls, target: dict, patch: dict):
+        for key, value in patch.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                cls._deep_merge(target[key], value)
+            else:
+                target[key] = value
+
+
 class Application:
     """Main application class using Pipecat."""
     
@@ -58,9 +86,16 @@ class Application:
         vad_threshold = float(os.environ.get("VAD_THRESHOLD", "0.5"))
         vad_prefix_padding_ms = int(os.environ.get("VAD_PREFIX_PADDING_MS", "300"))
         vad_silence_duration_ms = int(os.environ.get("VAD_SILENCE_DURATION_MS", "500"))
+        vad_idle_timeout_ms = int(os.environ.get("VAD_IDLE_TIMEOUT_MS", "10000"))
+
+        # Get OpenAI Realtime settings with defaults
+        openai_realtime_model = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
+        openai_realtime_voice = os.environ.get("OPENAI_REALTIME_VOICE", "cedar").lower()
+        openai_transcription_model = os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "gpt-realtime-whisper")
+        openai_noise_reduction = os.environ.get("OPENAI_NOISE_REDUCTION", "far_field")
         
         # Get instructions with default
-        instructions = os.environ.get("INSTRUCTIONS", "You are the Home Assistant Voice Agent and can control the Smart Home.")
+        instructions = os.environ.get("INSTRUCTIONS", DEFAULT_INSTRUCTIONS)
         
         # Get recording setting (optional, defaults to false)
         enable_recording = os.environ.get("ENABLE_RECORDING", "false").lower() == "true"
@@ -102,6 +137,11 @@ class Application:
         self.vad_threshold = vad_threshold
         self.vad_prefix_padding_ms = vad_prefix_padding_ms
         self.vad_silence_duration_ms = vad_silence_duration_ms
+        self.vad_idle_timeout_ms = vad_idle_timeout_ms
+        self.openai_realtime_model = openai_realtime_model
+        self.openai_realtime_voice = openai_realtime_voice
+        self.openai_transcription_model = openai_transcription_model
+        self.openai_noise_reduction = openai_noise_reduction
         self.instructions = instructions
         self.mcp_client = mcp_client
         
@@ -172,6 +212,9 @@ class Application:
                 AudioConfiguration,
                 AudioInput,
                 AudioOutput,
+                InputAudioNoiseReduction,
+                InputAudioTranscription,
+                PCMAudioFormat,
                 TurnDetection
             )
             
@@ -208,8 +251,16 @@ class Application:
             
             session_properties = SessionProperties(
                 instructions=self.instructions,
+                output_modalities=["audio"],
                 audio=AudioConfiguration(
                     input=AudioInput(
+                        format=PCMAudioFormat(),
+                        transcription=InputAudioTranscription(
+                            model=self.openai_transcription_model
+                        ),
+                        noise_reduction=InputAudioNoiseReduction(
+                            type=self.openai_noise_reduction
+                        ),
                         turn_detection=TurnDetection(
                             type="server_vad",
                             threshold=self.vad_threshold,
@@ -217,18 +268,41 @@ class Application:
                             silence_duration_ms=self.vad_silence_duration_ms
                         )
                     ),
-                    output=AudioOutput(voice="marin")
+                    output=AudioOutput(
+                        format=PCMAudioFormat(),
+                        voice=self.openai_realtime_voice
+                    )
                 ),
-                tools=all_tools
+                tools=all_tools,
+                max_output_tokens="inf"
             )
-            
+            session_update_patch = {
+                "audio": {
+                    "input": {
+                        "turn_detection": {
+                            "idle_timeout_ms": self.vad_idle_timeout_ms,
+                        }
+                    }
+                }
+            }
+
+            logger.info(
+                "🔧 Realtime config: model=%s voice=%s transcription=%s noise_reduction=%s vad_idle_timeout_ms=%s",
+                self.openai_realtime_model,
+                self.openai_realtime_voice,
+                self.openai_transcription_model,
+                self.openai_noise_reduction,
+                self.vad_idle_timeout_ms,
+            )
+
             logger.info(f"🔧 Creating session with {len(all_tools)} tools: {[tool.get('name', 'unknown') for tool in all_tools]}")
-            
+
             # Create new service instance
-            self.openai_service = OpenAIRealtimeLLMService(
+            self.openai_service = PatchedOpenAIRealtimeLLMService(
                 api_key=self.openai_api_key,
-                model="gpt-realtime",
+                model=self.openai_realtime_model,
                 session_properties=session_properties,
+                session_update_patch=session_update_patch,
                 start_audio_paused=False
             )
             logger.info(f"✅ OpenAI Service created: {type(self.openai_service).__name__}")

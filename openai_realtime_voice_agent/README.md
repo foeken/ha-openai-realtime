@@ -8,7 +8,7 @@ Home Assistant addon that provides OpenAI Realtime API integration with WebSocke
 
 1. In Home Assistant, go to **Supervisor** → **Add-on Store**
 2. Click the **⋮** menu (top right) → **Repositories**
-3. Add this repository: `https://github.com/fjfricke/ha-openai-realtime`
+3. Add this repository: `https://github.com/foeken/ha-openai-realtime`
 4. Find **OpenAI Realtime Voice Agent** in the addon store and install it
 
 ### Option 2: Manual Installation
@@ -32,9 +32,18 @@ Configure the addon in Home Assistant:
    - `vad_threshold`: Voice activity detection threshold (0.0-1.0, default: 0.5)
    - `vad_prefix_padding_ms`: Audio padding before detection in milliseconds (default: 300)
    - `vad_silence_duration_ms`: Duration of silence before stopping in milliseconds (default: 500)
-   - `instructions`: Custom instructions for the AI assistant (default: "You are the Home Assistant Voice Agent and can control the Smart Home.")
+   - `vad_idle_timeout_ms`: Idle timeout before the Realtime session prompts again (default: 10000)
+   - `openai_realtime_model`: OpenAI Realtime model (default: `gpt-realtime-2`)
+   - `openai_realtime_voice`: OpenAI Realtime voice (default: `cedar`)
+   - `openai_transcription_model`: Input transcription model (default: `gpt-realtime-whisper`)
+   - `openai_noise_reduction`: Input noise reduction (`near_field` or `far_field`, default: `far_field`)
+   - `instructions`: Custom instructions for the AI assistant (default: English smart-home assistant)
    - `session_reuse_timeout_seconds`: Timeout for session reuse in seconds (default: 300, max: 3600)
    - `enable_recording`: Enable audio recording for debugging (default: false)
+
+## Updates
+
+Home Assistant checks this repository for the latest add-on `version`. When a new version is pushed to `main`, the GitHub Actions workflow publishes matching GHCR images tagged with that version for `aarch64` and `amd64`, and Home Assistant can offer the update automatically.
 
 4. Start the addon
 
