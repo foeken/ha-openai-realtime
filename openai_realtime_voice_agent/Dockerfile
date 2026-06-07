@@ -56,9 +56,8 @@ RUN \
     && echo "LLVM_CONFIG_PATH=$LLVM_CONFIG_PATH" \
     && export LLVM_CONFIG="${LLVM_CONFIG_PATH:-/usr/bin/llvm-config}" \
     && echo "Using LLVM_CONFIG=$LLVM_CONFIG" \
-    && rm -f poetry.lock* \
     && LLVM_CONFIG="$LLVM_CONFIG" POETRY_VIRTUALENVS_CREATE=false poetry install --only=main --no-root --no-interaction --no-ansi \
-    && rm -f pyproject.toml \
+    && rm -f pyproject.toml poetry.lock* \
     && rm -rf openai_realtime_voice_agent/
 
 # Runtime stage - minimal image without build tools
