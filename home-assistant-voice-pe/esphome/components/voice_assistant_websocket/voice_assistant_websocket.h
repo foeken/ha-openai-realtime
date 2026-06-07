@@ -36,6 +36,7 @@ class VoiceAssistantWebSocket : public Component {
   void set_server_url(const std::string &url) { this->server_url_ = url; }
   void set_client_id(const std::string &client_id) { this->client_id_ = client_id; }
   void set_agent(const std::string &agent) { this->agent_ = agent; }
+  void set_input_channel(const std::string &input_channel);
   void set_microphone(microphone::Microphone *mic) { this->microphone_ = mic; }
   void set_speaker(speaker::Speaker *spkr) { this->speaker_ = spkr; }
   
@@ -64,6 +65,7 @@ class VoiceAssistantWebSocket : public Component {
   void disconnect_websocket_();
   void send_session_start_();
   static std::string json_escape_(const std::string &value);
+  const char *input_channel_name_() const;
   void send_audio_chunk_(const uint8_t *data, size_t len);
   void process_received_audio_(const uint8_t *data, size_t len);
   void on_microphone_data_(const std::vector<uint8_t> &data);
@@ -74,6 +76,7 @@ class VoiceAssistantWebSocket : public Component {
   std::string client_id_;
   std::string agent_;
   std::string wake_word_;
+  uint8_t input_channel_mode_{0};  // 0=left, 1=right, 2=average
   microphone::Microphone *microphone_{nullptr};
   speaker::Speaker *speaker_{nullptr};
   
@@ -113,8 +116,10 @@ class VoiceAssistantWebSocket : public Component {
   static const uint32_t INPUT_BUFFER_SIZE = (INPUT_SAMPLE_RATE * BYTES_PER_SAMPLE * AUDIO_SEND_INTERVAL_MS) / 1000;
   
   // Auto-stop tracking
+  uint32_t session_start_time_{0};  // Time when the current wake session started
   uint32_t last_speaker_audio_time_{0};  // Last time we received audio from speaker
   static const uint32_t AUTO_STOP_INACTIVITY_MS = 20000;  // Stop after 20 seconds of speaker inactivity
+  static const uint32_t NO_RESPONSE_TIMEOUT_MS = 20000;  // Stop if no assistant audio arrives after wake
   
   // Audio conversion buffers
   std::vector<int16_t> mono_buffer_;  // For stereo to mono conversion (input)

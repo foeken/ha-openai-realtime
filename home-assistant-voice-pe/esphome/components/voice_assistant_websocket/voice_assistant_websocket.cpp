@@ -103,7 +103,7 @@ void VoiceAssistantWebSocket::loop() {
   }
   
   // Auto-stop: Check if we should stop after inactivity
-  // Stop if: speaker hasn't spoken for 5 seconds
+  // Stop if: speaker hasn't spoken for 20 seconds
   // Note: We only check speaker audio, not microphone audio, because:
   // - Microphone always sends audio (background noise, silence, etc.)
   // - OpenAI's server_vad handles voice activity detection
@@ -112,13 +112,19 @@ void VoiceAssistantWebSocket::loop() {
     uint32_t current_time = millis();
     uint32_t time_since_speaker_audio = current_time - this->last_speaker_audio_time_;
     
-    // Only check if we've received at least one audio chunk (to avoid stopping immediately)
     if (this->last_speaker_audio_time_ > 0) {
-      // Stop if speaker hasn't spoken for 5 seconds
+      // Stop if speaker hasn't spoken for 20 seconds
       // If user speaks during this time, OpenAI will generate new audio, resetting the timer
       if (time_since_speaker_audio > AUTO_STOP_INACTIVITY_MS) {
         ESP_LOGI(TAG, "Auto-stopping: Speaker inactive for %u ms (threshold: %u ms)", 
                  time_since_speaker_audio, AUTO_STOP_INACTIVITY_MS);
+        this->stop();
+      }
+    } else if (this->session_start_time_ > 0) {
+      uint32_t time_since_session_start = current_time - this->session_start_time_;
+      if (time_since_session_start > NO_RESPONSE_TIMEOUT_MS) {
+        ESP_LOGI(TAG, "Auto-stopping: No assistant response after %u ms (threshold: %u ms)",
+                 time_since_session_start, NO_RESPONSE_TIMEOUT_MS);
         this->stop();
       }
     }
@@ -136,6 +142,7 @@ void VoiceAssistantWebSocket::dump_config() {
   ESP_LOGCONFIG(TAG, "  Server URL: %s", this->server_url_.c_str());
   ESP_LOGCONFIG(TAG, "  Client ID: %s", this->client_id_.c_str());
   ESP_LOGCONFIG(TAG, "  Agent: %s", this->agent_.empty() ? "(wake-word routed)" : this->agent_.c_str());
+  ESP_LOGCONFIG(TAG, "  Input Channel: %s", this->input_channel_name_());
   ESP_LOGCONFIG(TAG, "  Microphone Sample Rate: %u Hz", MICROPHONE_SAMPLE_RATE);
   ESP_LOGCONFIG(TAG, "  Input Sample Rate (after resampling): %u Hz", INPUT_SAMPLE_RATE);
   ESP_LOGCONFIG(TAG, "  Output Sample Rate: %u Hz", OUTPUT_SAMPLE_RATE);
@@ -149,6 +156,27 @@ void VoiceAssistantWebSocket::start(const std::string &wake_word) {
   this->start();
 }
 
+void VoiceAssistantWebSocket::set_input_channel(const std::string &input_channel) {
+  if (input_channel == "right") {
+    this->input_channel_mode_ = 1;
+  } else if (input_channel == "average") {
+    this->input_channel_mode_ = 2;
+  } else {
+    this->input_channel_mode_ = 0;
+  }
+}
+
+const char *VoiceAssistantWebSocket::input_channel_name_() const {
+  switch (this->input_channel_mode_) {
+    case 1:
+      return "right";
+    case 2:
+      return "average";
+    default:
+      return "left";
+  }
+}
+
 void VoiceAssistantWebSocket::start() {
   if (this->state_ == VOICE_ASSISTANT_WEBSOCKET_RUNNING) {
     ESP_LOGW(TAG, "Already running");
@@ -159,6 +187,7 @@ void VoiceAssistantWebSocket::start() {
   this->state_ = VOICE_ASSISTANT_WEBSOCKET_STARTING;
   
   // Reset auto-stop tracking
+  this->session_start_time_ = millis();
   this->last_speaker_audio_time_ = 0;
   
   // Reset explicit disconnect flag for new session
@@ -220,6 +249,7 @@ void VoiceAssistantWebSocket::stop() {
   while (!this->audio_queue_.empty()) {
     this->audio_queue_.pop();
   }
+  this->session_start_time_ = 0;
   
   if (this->state_callback_) {
     this->state_callback_(this->state_);
@@ -522,7 +552,7 @@ void VoiceAssistantWebSocket::on_microphone_data_(const std::vector<uint8_t> &da
   
   // Microphone is configured for 16kHz, 32-bit, stereo (required by micro_wake_word)
   // OpenAI expects 24kHz, 16-bit, mono (non-beta API requirement)
-  // Convert: 32-bit stereo -> 16-bit mono (16kHz) -> resample to 24kHz
+  // Convert: selected 32-bit stereo channel -> 16-bit mono (16kHz) -> resample to 24kHz
   
   size_t stereo_32bit_samples = data.size() / (4 * 2);  // 4 bytes per 32-bit sample, 2 channels
   size_t mono_16khz_samples = stereo_32bit_samples;
@@ -536,7 +566,16 @@ void VoiceAssistantWebSocket::on_microphone_data_(const std::vector<uint8_t> &da
   
   for (size_t i = 0; i < stereo_32bit_samples; i++) {
     int32_t left_sample = stereo_32bit[i * 2];
-    mono_16bit[i] = static_cast<int16_t>((left_sample >> 16));
+    int32_t right_sample = stereo_32bit[(i * 2) + 1];
+    int32_t selected_sample;
+    if (this->input_channel_mode_ == 1) {
+      selected_sample = right_sample;
+    } else if (this->input_channel_mode_ == 2) {
+      selected_sample = (left_sample / 2) + (right_sample / 2);
+    } else {
+      selected_sample = left_sample;
+    }
+    mono_16bit[i] = static_cast<int16_t>(selected_sample >> 16);
   }
   
   // Resample from 16kHz to 24kHz (1.5x upsampling)
@@ -644,8 +683,19 @@ void VoiceAssistantWebSocket::handle_websocket_event_(esp_websocket_event_id_t e
       
     case WEBSOCKET_EVENT_DISCONNECTED:
       ESP_LOGW(TAG, "WebSocket disconnected");
-      this->state_ = VOICE_ASSISTANT_WEBSOCKET_DISCONNECTED;
-      
+      this->state_ = VOICE_ASSISTANT_WEBSOCKET_IDLE;
+      this->session_start_time_ = 0;
+      this->last_speaker_audio_time_ = 0;
+      this->interrupt_time_ = 0;
+      this->reconnect_pending_ = false;
+      this->reconnect_attempts_ = 0;
+      if (this->speaker_ != nullptr) {
+        this->speaker_->stop();
+      }
+      while (!this->audio_queue_.empty()) {
+        this->audio_queue_.pop();
+      }
+
       if (this->state_callback_) {
         this->state_callback_(this->state_);
       }
@@ -653,17 +703,11 @@ void VoiceAssistantWebSocket::handle_websocket_event_(esp_websocket_event_id_t e
       // Trigger disconnected automation
       this->disconnected_trigger_.trigger();
       
-      // Only attempt reconnection if we didn't receive an explicit disconnect message
-      // If explicit_disconnect_ is true, we should stay in idle mode
-      if (!this->explicit_disconnect_ && 
-          (this->state_ == VOICE_ASSISTANT_WEBSOCKET_RUNNING || 
-           this->state_ == VOICE_ASSISTANT_WEBSOCKET_DISCONNECTED)) {
-        this->reconnect_pending_ = true;
-        this->last_reconnect_attempt_ = millis();
-      } else if (this->explicit_disconnect_) {
-        ESP_LOGI(TAG, "Explicit disconnect received, staying in idle mode (no reconnection)");
-        // Reset flag for next time
+      if (this->explicit_disconnect_) {
+        ESP_LOGI(TAG, "Explicit disconnect received, staying in idle mode");
         this->explicit_disconnect_ = false;
+      } else {
+        ESP_LOGI(TAG, "Remote websocket closed, returning to idle");
       }
       break;
       

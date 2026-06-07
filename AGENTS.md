@@ -3,7 +3,9 @@
 ## Voice Agent Development Loop
 
 - Run the server locally before deploying to Home Assistant; HA updates are slow, so use the local websocket target for iteration.
-- Keep the ESP client flashed against the local server URL while testing.
+- When launching the local server from Codex, load `/Users/andre.foeken/Code/ha-openai-realtime/.env` with override enabled so repo secrets win over any inherited terminal environment variables.
+- Keep the ESP client flashed against the local server URL while testing, then reflash it back to the Home Assistant add-on URL before handing the device back.
+- When the user asks for a quick validation loop, flash local server URL, run the local server, trigger the device with Sonos TTS, confirm the command from server logs plus HA state, then reflash the HA URL version.
 - For wake-word tests, say only `Hey Jarvis` first, then inspect server logs to confirm the trigger produced a client turn.
 - Wait briefly for the websocket connection to appear before deciding the wake was missed; the ESP can connect a moment after the spoken wake word finishes.
 - If the trigger still did not show up in the server logs and the ESP is still idle/disconnected, repeat only the wake word. Do not send the command until the wake trigger is confirmed.

@@ -740,7 +740,7 @@ class Application:
             model=self.openai_realtime_model,
             session_properties=session_properties,
             session_update_patch=session_update_patch,
-            start_audio_paused=True,
+            start_audio_paused=False,
             on_final_response_done=on_final_response_done,
             on_user_started_speaking=on_user_started_speaking,
         )

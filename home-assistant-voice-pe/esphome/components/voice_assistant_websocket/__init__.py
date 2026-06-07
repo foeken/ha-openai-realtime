@@ -18,6 +18,7 @@ VoiceAssistantWebSocket = voice_assistant_websocket_ns.class_(
 CONF_SERVER_URL = "server_url"
 CONF_CLIENT_ID = "client_id"
 CONF_AGENT = "agent"
+CONF_INPUT_CHANNEL = "input_channel"
 CONF_WAKE_WORD = "wake_word"
 CONF_VOICE_ASSISTANT_WEBSOCKET = "voice_assistant_websocket"
 CONF_ON_CONNECTED = "on_connected"
@@ -31,6 +32,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_SERVER_URL): cv.string,
         cv.Optional(CONF_CLIENT_ID, default=""): cv.string,
         cv.Optional(CONF_AGENT, default=""): cv.string,
+        cv.Optional(CONF_INPUT_CHANNEL, default="left"): cv.one_of("left", "right", "average", lower=True),
         cv.Optional(CONF_MICROPHONE): cv.use_id(microphone.Microphone),
         cv.Optional(CONF_SPEAKER): cv.use_id(speaker.Speaker),
         cv.Optional(CONF_ON_CONNECTED): automation.validate_automation(single=True),
@@ -60,6 +62,7 @@ async def to_code(config):
     cg.add(var.set_server_url(config[CONF_SERVER_URL]))
     cg.add(var.set_client_id(config[CONF_CLIENT_ID]))
     cg.add(var.set_agent(config[CONF_AGENT]))
+    cg.add(var.set_input_channel(config[CONF_INPUT_CHANNEL]))
     
     if CONF_MICROPHONE in config:
         mic = await cg.get_variable(config[CONF_MICROPHONE])

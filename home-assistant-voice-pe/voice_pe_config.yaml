@@ -1099,6 +1099,7 @@ voice_assistant_websocket:
   # Server URL - uses secret from secrets.yaml
   server_url: !secret server_url
   client_id: ${satellite_id}
+  input_channel: average
   
   # Audio input (microphone) - reference to I2S audio input
   microphone: i2s_mics
