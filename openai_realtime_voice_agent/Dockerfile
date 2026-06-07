@@ -52,12 +52,14 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV POETRY_VIRTUALENVS_CREATE=false
 # Find and set LLVM_CONFIG path
 RUN \
+    echo "setuptools<71" > /tmp/build-constraints.txt \
+    && \
     LLVM_CONFIG_PATH=$(which llvm-config || find /usr/bin /usr/local/bin -name llvm-config* 2>/dev/null | head -1) \
     && echo "LLVM_CONFIG_PATH=$LLVM_CONFIG_PATH" \
     && export LLVM_CONFIG="${LLVM_CONFIG_PATH:-/usr/bin/llvm-config}" \
     && echo "Using LLVM_CONFIG=$LLVM_CONFIG" \
-    && LLVM_CONFIG="$LLVM_CONFIG" POETRY_VIRTUALENVS_CREATE=false poetry install --only=main --no-root --no-interaction --no-ansi \
-    && rm -f pyproject.toml poetry.lock* \
+    && PIP_CONSTRAINT=/tmp/build-constraints.txt LLVM_CONFIG="$LLVM_CONFIG" POETRY_VIRTUALENVS_CREATE=false poetry install --only=main --no-root --no-interaction --no-ansi \
+    && rm -f pyproject.toml poetry.lock* /tmp/build-constraints.txt \
     && rm -rf openai_realtime_voice_agent/
 
 # Runtime stage - minimal image without build tools
