@@ -1115,7 +1115,7 @@ voice_assistant_websocket:
         decibel_reduction: 20  # Lower media volume by 20dB when voice assistant is active
         duration: 0.0s
   on_disconnected:
-    - lambda: id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};
+    - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
     # Ensure micro_wake_word continues running after disconnect
     - micro_wake_word.start:
@@ -1126,7 +1126,7 @@ voice_assistant_websocket:
         decibel_reduction: 0
         duration: 1.0s
   on_stopped:
-    - lambda: id(voice_assistant_phase) = ${voice_assist_not_ready_phase_id};
+    - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
     - script.execute: control_leds
     # Restore media volume when voice assistant stops
     - mixer_speaker.apply_ducking:

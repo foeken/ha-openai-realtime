@@ -176,6 +176,13 @@ class SessionManager:
         """
         if client_id in self.context_aggregators:
             del self.context_aggregators[client_id]
+
+    def clear_context(self, client_id: str):
+        """Clear in-memory conversation context for a running pipeline client."""
+        if client_id in self.context_aggregators:
+            context = self.context_aggregators[client_id].user().context
+            context.set_messages([])
+            logger.info(f"🧹 Cleared context for client {client_id}")
     
     def cleanup_before_new_session(self, client_id: str):
         """Cleanup before creating a new session for a client.
@@ -228,31 +235,16 @@ class SessionManager:
         return None
     
     def handle_client_disconnect(self, client_id: str, service: Optional[OpenAIRealtimeLLMService] = None):
-        """Handle client disconnection by caching context.
+        """Handle client disconnection by clearing per-wake session state.
         
         Args:
             client_id: Unique identifier for the client device
             service: Optional service instance to cache context from
         """
-        logger.info(f"🔌 Client {client_id} disconnected - caching context")
-        
-        # Get service to cache from
-        service_to_cache = None
-        if client_id in self.current_services:
-            service_to_cache = self.current_services[client_id]
-        elif service:
-            service_to_cache = service
-        
-        if service_to_cache:
-            try:
-                self.cache_context_from_service(client_id, service_to_cache)
-                if client_id in self.current_services:
-                    del self.current_services[client_id]
-                logger.info(f"💾 Cached context for disconnected client {client_id}")
-            except Exception as e:
-                logger.warning(f"⚠️ Error caching context for disconnected client {client_id}: {e}")
-        else:
-            logger.debug(f"No service found to cache context for client {client_id}")
+        logger.info(f"🔌 Client {client_id} disconnected - clearing wake session context")
+
+        self.context_caches.pop(client_id, None)
+        self.current_services.pop(client_id, None)
 
 
 class ContextInitializer(FrameProcessor):
@@ -286,4 +278,3 @@ class ContextInitializer(FrameProcessor):
             return
         
         await self.push_frame(frame, direction)
-

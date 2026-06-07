@@ -1,5 +1,5 @@
 name: OpenAI Realtime Voice Agent
-version: "0.2.1"
+version: "0.2.2"
 slug: openai_realtime_voice_agent
 description: Voice control using OpenAI Realtime API with WebSocket support for ESP32 devices
 url: https://github.com/foeken/ha-openai-realtime
@@ -19,14 +19,14 @@ options:
   vad_threshold: 0.5
   vad_prefix_padding_ms: 300
   vad_silence_duration_ms: 500
-  vad_idle_timeout_ms: 10000
+  vad_idle_timeout_ms: 0
   # OpenAI Realtime settings
   openai_realtime_model: "gpt-realtime-2"
   openai_realtime_voice: "cedar"
   openai_transcription_model: "gpt-realtime-whisper"
   openai_noise_reduction: "far_field"
   # OpenAI instructions
-  instructions: "You are the Home Assistant Voice Agent and can control the smart home. Respond in English unless the user explicitly asks for another language."
+  instructions: "You are the Home Assistant Voice Agent and can control the smart home. Respond in English unless the user explicitly asks for another language. When a tool is needed, call the tool without filler like 'let me check', then speak a concise answer after the tool result returns."
   # Session management
   session_reuse_timeout_seconds: 300
   # Audio recording (optional, for debugging)

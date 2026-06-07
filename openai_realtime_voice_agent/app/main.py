@@ -5,11 +5,12 @@ import asyncio
 import json
 import logging
 from contextlib import suppress
-from typing import Optional
+from typing import Literal, Optional
 import dotenv
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
+from pipecat.services.openai.realtime import events as realtime_events
 from pipecat.services.openai.realtime.llm import OpenAIRealtimeLLMService
 from pipecat.transports.websocket.server import WebsocketServerTransport
 from websockets.asyncio.client import connect as websocket_connect
@@ -36,7 +37,22 @@ dotenv.load_dotenv()
 
 DEFAULT_INSTRUCTIONS = (
     "You are the Home Assistant Voice Agent and can control the smart home. "
-    "Respond in English unless the user explicitly asks for another language."
+    "Respond in English unless the user explicitly asks for another language. "
+    "When a tool is needed, call the tool without filler like 'let me check', "
+    "then speak a concise answer after the tool result returns."
+)
+
+
+class InputAudioBufferTimeoutTriggered(realtime_events.ServerEvent):
+    type: Literal["input_audio_buffer.timeout_triggered"]
+    audio_start_ms: int
+    audio_end_ms: int
+    item_id: Optional[str] = None
+
+
+realtime_events._server_event_types.setdefault(
+    "input_audio_buffer.timeout_triggered",
+    InputAudioBufferTimeoutTriggered,
 )
 
 
@@ -56,6 +72,71 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
         self._ping_interval_seconds = ping_interval_seconds
         self._ping_timeout_seconds = ping_timeout_seconds
         self._reconnect_lock = asyncio.Lock()
+        self._assistant_response_text_parts = []
+        self._create_response_after_active_done = False
+
+    async def _receive_task_handler(self):
+        async for message in self._websocket:
+            evt = realtime_events.parse_server_event(message)
+            if evt.type == "session.created":
+                await self._handle_evt_session_created(evt)
+            elif evt.type == "session.updated":
+                await self._handle_evt_session_updated(evt)
+            elif evt.type == "response.output_audio.delta":
+                await self._handle_evt_audio_delta(evt)
+            elif evt.type == "response.output_audio.done":
+                await self._handle_evt_audio_done(evt)
+            elif evt.type == "conversation.item.added":
+                await self._handle_evt_conversation_item_added(evt)
+            elif evt.type == "conversation.item.done":
+                await self._handle_evt_conversation_item_done(evt)
+            elif evt.type == "conversation.item.input_audio_transcription.delta":
+                await self._handle_evt_input_audio_transcription_delta(evt)
+            elif evt.type == "conversation.item.input_audio_transcription.completed":
+                await self.handle_evt_input_audio_transcription_completed(evt)
+            elif evt.type == "conversation.item.retrieved":
+                await self._handle_conversation_item_retrieved(evt)
+            elif evt.type == "response.done":
+                await self._handle_evt_response_done(evt)
+            elif evt.type == "input_audio_buffer.speech_started":
+                await self._handle_evt_speech_started(evt)
+            elif evt.type == "input_audio_buffer.speech_stopped":
+                await self._handle_evt_speech_stopped(evt)
+            elif evt.type == "response.output_text.delta":
+                await self._handle_evt_text_delta(evt)
+            elif evt.type == "response.output_audio_transcript.delta":
+                await self._handle_evt_audio_transcript_delta(evt)
+            elif evt.type == "response.output_audio_transcript.done":
+                await self._handle_evt_audio_transcript_done(evt)
+            elif evt.type == "response.function_call_arguments.done":
+                await self._handle_evt_function_call_arguments_done(evt)
+            elif evt.type == "error":
+                if await self._maybe_handle_evt_retrieve_conversation_item_error(evt):
+                    continue
+                fatal = await self._handle_evt_error(evt)
+                if fatal:
+                    return
+
+    async def start(self, frame):
+        """Start the processor without opening an idle Realtime websocket."""
+        await super(OpenAIRealtimeLLMService, self).start(frame)
+
+    async def _handle_context(self, context):
+        if not self._context:
+            self._context = context
+            await self._process_completed_function_calls(send_new_results=False)
+            if self._is_live_audio_session_active():
+                self._llm_needs_conversation_setup = False
+                logger.debug("%s using live Realtime audio context without replay", self)
+                return
+
+            await self._create_response()
+        else:
+            self._context = context
+            await self._process_completed_function_calls(send_new_results=True)
+
+    def _is_live_audio_session_active(self):
+        return bool(self._websocket and not self._audio_input_paused)
 
     async def send_client_event(self, event):
         payload = event.model_dump(exclude_none=True)
@@ -64,14 +145,75 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
         await self._ws_send(payload)
 
     async def _handle_evt_error(self, evt):
-        if evt.error.code in (
-            "response_cancel_not_active",
-            "conversation_already_has_active_response",
-        ):
+        if evt.error.code == "response_cancel_not_active":
             logger.debug("%s %s", self, evt.error.message)
-            return
+            return False
+
+        if evt.error.code == "conversation_already_has_active_response":
+            logger.debug("%s %s", self, evt.error.message)
+            self._create_response_after_active_done = True
+            return False
+
+        if (
+            evt.error.code == "invalid_value"
+            and evt.error.message
+            and "Audio content of" in evt.error.message
+            and "already shorter than" in evt.error.message
+        ):
+            logger.debug("%s ignoring stale audio truncate error: %s", self, evt.error.message)
+            self._current_audio_response = None
+            return False
 
         await super()._handle_evt_error(evt)
+        return True
+
+    async def handle_evt_input_audio_transcription_completed(self, evt):
+        transcript = evt.transcript.strip()
+        if transcript:
+            logger.info("Voice user transcript: %s", transcript)
+
+        await super().handle_evt_input_audio_transcription_completed(evt)
+
+    async def _handle_evt_audio_transcript_delta(self, evt):
+        if evt.delta:
+            self._assistant_response_text_parts.append(evt.delta)
+
+        await super()._handle_evt_audio_transcript_delta(evt)
+
+    async def _handle_evt_audio_transcript_done(self, evt):
+        transcript = evt.transcript.strip()
+        if transcript:
+            self._assistant_response_text_parts = [transcript]
+
+    async def _handle_evt_response_done(self, evt):
+        await super()._handle_evt_response_done(evt)
+        if not self._assistant_response_text_parts:
+            text = self._extract_assistant_response_text(evt.response)
+            if text:
+                self._assistant_response_text_parts = [text]
+        self._log_assistant_response_text()
+
+        if self._create_response_after_active_done:
+            self._create_response_after_active_done = False
+            await self._create_response()
+
+    def _log_assistant_response_text(self):
+        text = "".join(self._assistant_response_text_parts).strip()
+        self._assistant_response_text_parts = []
+        if text:
+            logger.info("Voice assistant response: %s", " ".join(text.split()))
+
+    def _extract_assistant_response_text(self, response):
+        parts = []
+        for item in response.output or []:
+            if item.role != "assistant" or not item.content:
+                continue
+            for content in item.content:
+                for field in ("transcript", "text"):
+                    value = getattr(content, field, None)
+                    if value:
+                        parts.append(value)
+        return " ".join(parts).strip()
 
     async def _connect(self):
         try:
@@ -96,6 +238,14 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
         if self._disconnecting:
             return
 
+        if not self._websocket:
+            if not await self._ensure_realtime_websocket():
+                await self.push_error(
+                    error_msg="Error sending client event: OpenAI Realtime websocket is not connected"
+                )
+                return
+            await self._wait_for_session_ready(realtime_message)
+
         websocket = self._websocket
         try:
             await self._send_realtime_message(realtime_message)
@@ -117,6 +267,26 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
                 error_msg=f"Error sending client event after reconnect: {e}",
                 exception=e,
             )
+
+    async def _ensure_realtime_websocket(self) -> bool:
+        async with self._reconnect_lock:
+            if self._disconnecting:
+                return False
+
+            if self._websocket:
+                return True
+
+            self._api_session_ready = False
+            self._llm_needs_conversation_setup = True
+            self._context = None
+            self._completed_tool_calls = set()
+            self._pending_function_calls.clear()
+            self._current_audio_response = None
+            self._assistant_response_text_parts = []
+            self._create_response_after_active_done = False
+
+            await self._connect()
+            return self._websocket is not None
 
     async def _send_realtime_message(self, realtime_message):
         if not self._websocket:
@@ -148,9 +318,30 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
             self._api_session_ready = False
             self._llm_needs_conversation_setup = True
             self._current_audio_response = None
+            self._assistant_response_text_parts = []
+            self._create_response_after_active_done = False
 
             await self._connect()
             return self._websocket is not None
+
+    async def park_realtime_connection(self):
+        """Close the upstream Realtime websocket between ESP wake sessions."""
+        async with self._reconnect_lock:
+            if not self._websocket and not self._receive_task:
+                return
+
+            logger.info("Parking OpenAI Realtime websocket until the next wake session")
+            await self._disconnect()
+            self._api_session_ready = False
+            self._run_llm_when_api_session_ready = False
+            self._llm_needs_conversation_setup = True
+            self._context = None
+            self._completed_tool_calls = set()
+            self._pending_function_calls.clear()
+            self._current_audio_response = None
+            self._current_assistant_response = None
+            self._assistant_response_text_parts = []
+            self._create_response_after_active_done = False
 
     async def _wait_for_session_ready(self, realtime_message):
         if realtime_message.get("type") == "session.update":
@@ -199,7 +390,7 @@ class Application:
         vad_threshold = float(os.environ.get("VAD_THRESHOLD", "0.5"))
         vad_prefix_padding_ms = int(os.environ.get("VAD_PREFIX_PADDING_MS", "300"))
         vad_silence_duration_ms = int(os.environ.get("VAD_SILENCE_DURATION_MS", "500"))
-        vad_idle_timeout_ms = int(os.environ.get("VAD_IDLE_TIMEOUT_MS", "10000"))
+        vad_idle_timeout_ms = int(os.environ.get("VAD_IDLE_TIMEOUT_MS", "0"))
 
         # Get OpenAI Realtime settings with defaults
         openai_realtime_model = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
@@ -389,15 +580,17 @@ class Application:
                 tools=all_tools,
                 max_output_tokens="inf"
             )
-            session_update_patch = {
-                "audio": {
-                    "input": {
-                        "turn_detection": {
-                            "idle_timeout_ms": self.vad_idle_timeout_ms,
+            session_update_patch = {}
+            if self.vad_idle_timeout_ms > 0:
+                session_update_patch = {
+                    "audio": {
+                        "input": {
+                            "turn_detection": {
+                                "idle_timeout_ms": self.vad_idle_timeout_ms,
+                            }
                         }
                     }
                 }
-            }
 
             logger.info(
                 "🔧 Realtime config: model=%s voice=%s transcription=%s noise_reduction=%s vad_idle_timeout_ms=%s",
@@ -416,7 +609,7 @@ class Application:
                 model=self.openai_realtime_model,
                 session_properties=session_properties,
                 session_update_patch=session_update_patch,
-                start_audio_paused=False
+                start_audio_paused=True
             )
             logger.info(f"✅ OpenAI Service created: {type(self.openai_service).__name__}")
             
@@ -454,6 +647,8 @@ class Application:
         # Setup WebSocket event handlers
         async def on_client_connected(client_id: str):
             """Handle new client connection."""
+            if self.openai_service:
+                self.openai_service.set_audio_input_paused(False)
             if self.session_manager and self.openai_service:
                 self.session_manager.set_current_service(client_id, self.openai_service)
             if self.audio_recording_service:
@@ -461,10 +656,15 @@ class Application:
         
         def on_client_disconnected(client_id: str):
             """Handle client disconnection."""
+            if self.openai_service:
+                self.openai_service.set_audio_input_paused(True)
             if self.session_manager:
                 self.session_manager.handle_client_disconnect(client_id, self.openai_service)
+                self.session_manager.clear_context("server")
             if self.audio_recording_service:
                 self.audio_recording_service.stop_recording()
+            if self.openai_service and hasattr(self.openai_service, "park_realtime_connection"):
+                asyncio.create_task(self.openai_service.park_realtime_connection())
         
         # Function to get OpenAI service for a client
         def get_openai_service_for_client(client_id: str) -> Optional[OpenAIRealtimeLLMService]:
