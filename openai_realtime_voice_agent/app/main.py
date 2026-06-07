@@ -46,6 +46,8 @@ dotenv.load_dotenv()
 DEFAULT_INSTRUCTIONS = (
     "You are the Home Assistant Voice Agent and can control the smart home. "
     "Respond in English unless the user explicitly asks for another language. "
+    "Hey Mycroft is currently disabled on the ESP client because the V2 wake-word "
+    "model tensor arena no longer fits after tensor-size changes. "
     "When a tool is needed, call the tool without filler like 'let me check', "
     "then speak a concise answer after the tool result returns."
 )
@@ -74,6 +76,7 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
         ping_interval_seconds: Optional[float] = 30.0,
         ping_timeout_seconds: Optional[float] = 60.0,
         on_final_response_done: Optional[Callable[[], None]] = None,
+        on_user_started_speaking: Optional[Callable[[], object]] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -81,6 +84,7 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
         self._ping_interval_seconds = ping_interval_seconds
         self._ping_timeout_seconds = ping_timeout_seconds
         self._on_final_response_done = on_final_response_done
+        self._on_user_started_speaking = on_user_started_speaking
         self._reconnect_lock = asyncio.Lock()
         self._assistant_response_text_parts = []
         self._create_response_after_active_done = False
@@ -189,6 +193,7 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
 
     async def _handle_evt_speech_started(self, evt):
         await super()._handle_evt_speech_started(evt)
+        await self._notify_user_started_speaking()
         await self.push_frame(UserStartedSpeakingFrame(), FrameDirection.UPSTREAM)
 
     async def _handle_evt_speech_stopped(self, evt):
@@ -234,6 +239,17 @@ class PatchedOpenAIRealtimeLLMService(OpenAIRealtimeLLMService):
             self._on_final_response_done()
         except Exception as exc:
             logger.warning("Failed to notify final response completion: %s", exc)
+
+    async def _notify_user_started_speaking(self):
+        if not self._on_user_started_speaking:
+            return
+
+        try:
+            result = self._on_user_started_speaking()
+            if hasattr(result, "__await__"):
+                await result
+        except Exception as exc:
+            logger.warning("Failed to notify user speech start: %s", exc)
 
     def _response_has_function_call(self, response) -> bool:
         for item in response.output or []:
@@ -431,7 +447,7 @@ class Application:
         websocket_host = os.environ.get("WEBSOCKET_HOST", "0.0.0.0")
         client_metadata_timeout = float(os.environ.get("CLIENT_METADATA_TIMEOUT_SECONDS", "1.0"))
         auto_disconnect_after_response_seconds = float(
-            os.environ.get("AUTO_DISCONNECT_AFTER_RESPONSE_SECONDS", "0.5")
+            os.environ.get("AUTO_DISCONNECT_AFTER_RESPONSE_SECONDS", "5.0")
         )
         
         # Get turn detection settings with defaults
@@ -616,6 +632,7 @@ class Application:
         agent: AgentProfile,
         transport: ClientWebsocketTransport,
         on_final_response_done: Optional[Callable[[], None]] = None,
+        on_user_started_speaking: Optional[Callable[[], object]] = None,
     ) -> OpenAIRealtimeLLMService:
         """Create a new OpenAI Realtime service for one client connection."""
         logger.info("🆕 Creating OpenAI session for %s using agent '%s'", client_id, agent.name)
@@ -725,6 +742,7 @@ class Application:
             session_update_patch=session_update_patch,
             start_audio_paused=True,
             on_final_response_done=on_final_response_done,
+            on_user_started_speaking=on_user_started_speaking,
         )
 
         async def disconnect_client_callback():
@@ -837,6 +855,11 @@ class Application:
             agent=agent,
             transport=transport,
             on_final_response_done=auto_disconnect.arm if auto_disconnect else None,
+            on_user_started_speaking=(
+                lambda: auto_disconnect.cancel_pending("user speech")
+                if auto_disconnect
+                else None
+            ),
         )
         service_holder["service"] = service
 

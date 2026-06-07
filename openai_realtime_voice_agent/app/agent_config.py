@@ -17,6 +17,15 @@ def normalize_route_key(value: Optional[str]) -> Optional[str]:
     return normalized or None
 
 
+def _display_agent_name(name: str) -> str:
+    return " ".join(part.capitalize() for part in name.split("_") if part)
+
+
+def _instructions_for_named_agent(default_instructions: str, agent_name: str) -> str:
+    display_name = _display_agent_name(agent_name)
+    return f"Your agent name is {display_name}. {default_instructions}"
+
+
 def _parse_tools(value) -> Optional[frozenset[str]]:
     if value is None:
         return None
@@ -88,7 +97,10 @@ class AgentRegistry:
         logger.info("Using default agent settings for unknown agent route '%s'", resolved_name)
         return AgentProfile(
             name=resolved_name,
-            instructions=default_profile.instructions,
+            instructions=_instructions_for_named_agent(
+                default_profile.instructions,
+                resolved_name,
+            ),
             voice=default_profile.voice,
             tools=default_profile.tools,
         )
@@ -219,7 +231,17 @@ def load_agent_registry(
         "hey_jarvis": "jarvis",
         "okay_nabu": "nabu",
     }
+    # Hey Mycroft is intentionally not mapped by default: the ESP firmware
+    # currently disables it because the V2 model tensor arena no longer fits.
     wake_word_map.update(_parse_mapping(env.get("WAKE_WORD_AGENT_MAP")))
+
+    for agent_name in sorted(set(wake_word_map.values())):
+        if agent_name not in profiles:
+            profiles[agent_name] = AgentProfile(
+                name=agent_name,
+                instructions=_instructions_for_named_agent(default_instructions, agent_name),
+                voice=default_voice,
+            )
 
     if default_agent not in profiles:
         first_profile = next(iter(profiles.values()))

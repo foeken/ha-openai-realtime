@@ -84,6 +84,16 @@ class SessionAutoDisconnect(FrameProcessor):
         self._armed = True
         logger.debug("🔌 Auto-disconnect armed for client %s", self._client_id)
 
+    async def cancel_pending(self, reason: str = "activity"):
+        if self._armed or (self._disconnect_task and not self._disconnect_task.done()):
+            logger.debug(
+                "🔌 Auto-disconnect cancelled for client %s after %s",
+                self._client_id,
+                reason,
+            )
+        self._armed = False
+        await self._cancel_disconnect_task()
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         if isinstance(frame, StartFrame):
             await super().process_frame(frame, direction)
@@ -125,11 +135,14 @@ class SessionAutoDisconnect(FrameProcessor):
 
     async def _disconnect_after_delay(self):
         self._disconnecting = True
-        if self._delay_seconds > 0:
-            await asyncio.sleep(self._delay_seconds)
+        try:
+            if self._delay_seconds > 0:
+                await asyncio.sleep(self._delay_seconds)
 
-        logger.info("🔌 Auto-disconnecting client %s after assistant response", self._client_id)
-        await self._disconnect_callback()
+            logger.info("🔌 Auto-disconnecting client %s after assistant response", self._client_id)
+            await self._disconnect_callback()
+        finally:
+            self._disconnecting = False
 
 
 class WebSocketHandler:

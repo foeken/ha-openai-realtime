@@ -1068,9 +1068,9 @@ micro_wake_word:
                       - voice_assistant_websocket.interrupt:
                           id: voice_assistant_ws
                     else:
-                      # Bot not speaking - stop voice assistant (disconnect)
-                      - voice_assistant_websocket.stop:
-                          id: voice_assistant_ws
+                      # Already listening during the follow-up window; keep
+                      # the websocket open instead of ending the session.
+                      - logger.log: "Wake word detected while already listening"
               else:
                 # Voice assistant not running - start it
                 - voice_assistant_websocket.start:
